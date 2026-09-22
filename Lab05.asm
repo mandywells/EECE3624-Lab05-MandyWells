@@ -19,19 +19,24 @@
                             ; (the location of the reset vector)
 rjmp main					; allow reset to run this program
 
+.org 0x0004
+rjmp int1_isr
+
+.org 0x0008
+rjmp int3_isr
+
+.org 0x0020					; Move the "main" to 0x0020 to make room for ISRs
+
 /**********
 * Main code
 **********/
-.org 0x0020					; Move the "main" to 0x0020 to make room for ISRs
-
-;added by Mandy
-.def BlinkFreq = R20
-
-.equ BlinkFreqMin = 1
-.equ BlinkFreqMax = 15
-.equ InitialBlinkFreq = BlinkFreqMin
-
 main:                       ; jump here on reset
+	.def BlinkFreq = R20		;holds current blink rate (1-15 Hz)
+	.equ BlinkFreqMin = 1
+	.equ BlinkFreqMax = 15
+	.equ InitialBlinkFreq = BlinkFreqMin
+  
+  
     ldi R16, HIGH(RAMEND)   ; initialize stack (default RAMEND = 0x10FF)
     out SPH, R16
     ldi R16, low(RAMEND)
@@ -39,35 +44,62 @@ main:                       ; jump here on reset
 
 	/* Additional Setup before Main Loop */
 
-    ;added by Mandy
-    LDI BlinkFreq, InitialBlinkFreq
+    LDI BlinkFreq, InitialBlinkFreq		;set the blink freq to 1 to start
 
+	;blinking LED
     LDI  R16,(1<<DDA7)		; Set the mask to make Port A.7 an output
-    OUT  DDRA,R16		; Load bitmask to PORTA register
+    OUT  DDRA,R16			; Load bitmask to PORTA register
 
-    ;added by Mandy
-    LDI R16, (1 << DDA7)
-    OUT DDRC, R16
+	LDI R16, 0
+	OUT DDRB, R16
+
+	LDI R16, 0x0F
+	OUT DDRC, R16
+
+	LDI R16, 0
+	OUT DDRD, R16
+
+    LDI R16, (1 << PB1) | (1 << PB3)
+    OUT PORTB, R16
+
+	LDI R16, (1 <<ISC11) | (1 << ISC10) | (1 << ISC31) | (1 << ISC30)
+	STS EICRA, R16
+
+	LDI R16, (1 << INT1) | (1 << INT3)
+	OUT EIMSK, R16
+
+	sei
 
     
 mainLoop:
     CBI  PORTA, PORTA7       ; turn BOOT LED on (active low) by clearing PORTA.7
 
     ; kill some time
-    ldi R16, 16-BlinkFreq    ; R16 is outer loop counter
+	
+	PUSH BlinkFreq
+	NEG BlinkFreq
+	SUBI BlinkFreq, -16 ;(-BlinkFreq + 16 = 16 - BlinkFreq)
+    MOV R16, BlinkFreq  ; R16 is outer loop counter (16 - BlinkFreq)
+	POP BlinkFreq;		;restore value
+
 outer_loop1:
     ldi R24, low(0xFFFF)     ; load low and high parts of R25:R24 pair with
     ldi R25, high(0xFFFF)    ; loop count by loading registers separately
     inner_loop1:
-        sbiw R24, 1         ; decrement inner loop counter (R25:R24 pair)
-        brne inner_loop1    ; loop back if R25:R24 isn't zero
-    dec R16                 ; decrement the outer loop counter (R16)
-    brne outer_loop1        ; loop back if R16 isn't zero
-
-    sbi PORTA, PORTA7       ; turn BOOT LED off (active low) by setting PORTA.7
+        sbiw R24, 1          ; decrement inner loop counter (R25:R24 pair)
+        brne inner_loop1     ; loop back if R25:R24 isn't zero
+    dec R16                  ; decrement the outer loop counter (R16)
+    brne outer_loop1         ; loop back if R16 isn't zero
+	
+    sbi PORTA, PORTA7        ; turn BOOT LED off (active low) by setting PORTA.7
 
     ; kill some more time
-    ldi R16, 16-BlinkFreq             ; R16 is outer loop counter
+	PUSH BlinkFreq
+	NEG BlinkFreq
+	SUBI BlinkFreq, -16 ;(-BlinkFreq + 16 = 16 - BlinkFreq)
+    MOV R16, BlinkFreq  ; R16 is outer loop counter
+	POP BlinkFreq		;restore value
+
 outer_loop2:
     ldi R24, low(0xFFFF)     ; load low and high parts of R25:R24 pair with
     ldi R25, high(0xFFFF)    ; loop count by loading registers separately
@@ -83,4 +115,33 @@ outer_loop2:
 * ISR code
 **********/
 .org 0x0200							; Load the ISR code higher than main code
-int1_isr:
+
+int1_isr: ;DOWN
+	PUSH R16
+	LDI R16, BlinkFreqMin
+	CP R16, BlinkFreq
+	BRLO gtm ;greater than min
+	rjmp int1_end
+gtm:
+	DEC BlinkFreq
+
+	MOV R16, BlinkFreq
+	andi R16, 0x0F
+	OUT PORTC, BlinkFreq
+int1_end:
+	POP R16
+	reti
+
+int3_isr: ;UP
+	CPI BlinkFreq, BlinkFreqMax
+	BRLO ltm ;less than max
+	rjmp int3_end
+ltm:
+	INC BlinkFreq
+	PUSH R16
+	MOV R16, BlinkFreq
+	andi R16, 0x0F
+	OUT PORTC, BlinkFreq
+	POP R16
+int3_end:
+	reti
